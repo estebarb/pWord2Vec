@@ -1,8 +1,10 @@
-CC = icpc
-MPICC = mpiicpc
-CFLAGS = -std=c++11 -qopenmp -O3 -D USE_MKL -mkl=sequential -Wall -xhost
+CC = g++
+MPICC = g++
+#CFLAGS = -std=c++11 -fopenmp -O3 -Wall -march=native -mtune=native
+CFLAGS = -std=c++11 -fopenmp -O3 -Wall -march=native -mtune=native -D USE_MKL -lblas
 
-all: pWord2Vec pWord2Vec_mpi 
+all: pWord2Vec
+#pWord2Vec_mpi 
 
 pWord2Vec: pWord2Vec.cpp
 	$(CC) pWord2Vec.cpp -o pWord2Vec $(CFLAGS)
