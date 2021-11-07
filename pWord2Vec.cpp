@@ -110,9 +110,7 @@ void ReadWord(char *word, FILE *fin) {
     int a = 0, ch;
     while (!feof(fin)) {
         ch = fgetc(fin);
-        if (ch == 13)
-            continue;
-        if ((ch == ' ') || (ch == '\t') || (ch == '\n')) {
+        if (ch <= ' ') {
             if (a > 0) {
                 if (ch == '\n')
                     ungetc(ch, fin);
@@ -166,11 +164,8 @@ int ReadWordIndex(FILE *fin) {
 
 // Adds a word to the vocabulary
 int AddWordToVocab(char *word) {
-    int hash, length = strlen(word) + 1;
-    if (length > MAX_STRING)
-        length = MAX_STRING;
-    vocab[vocab_size].word = (char *) calloc(length, sizeof(char));
-    strcpy(vocab[vocab_size].word, word);
+    int hash;
+    vocab[vocab_size].word = strdup(word);
     vocab[vocab_size].cn = 0;
     vocab_size++;
     // Reallocate memory if needed
