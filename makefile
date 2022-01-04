@@ -1,7 +1,7 @@
 CC = g++
 MPICC = g++
 #CFLAGS = -std=c++11 -fopenmp -O3 -Wall -march=native -mtune=native
-CFLAGS = -I/opt/arm/armpl_21.1_gcc-9.3/include -std=c++11 -fopenmp -O3 -Wall -march=native -mtune=native -D USE_MKL
+CFLAGS = -I/opt/arm/armpl_21.1_gcc-9.3/include -std=c++11 -fopenmp -g -O0 -Wall -march=native -mtune=native -D USE_MKL
 LDFLAGS = -L/opt/arm/armpl_21.1_gcc-9.3/lib -fopenmp -larmpl_lp64 -lgfortran -lastring -lamath
 
 all: pWord2Vec

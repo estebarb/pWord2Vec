@@ -18,6 +18,7 @@
 
 #include <stdio.h>
 #include <stdint.h>
+#include <inttypes.h>
 #include <cstring>
 #include <cmath>
 #include <algorithm>
@@ -46,14 +47,14 @@ struct vocab_word {
 
 class sequence {
 public:
-    size_t *indices;
-    int64_t *meta;
-    size_t length;
+    int *indices;
+    int *meta;
+    int length;
 
-    sequence(size_t len) {
+    sequence(int len) {
         length = len;
-        indices = (size_t *) _mm_malloc(length * sizeof(size_t), 64);
-        meta = (int64_t *) _mm_malloc(length * sizeof(int64_t), 64);
+        indices = (int *) _mm_malloc(length * sizeof(int), 64);
+        meta = (int *) _mm_malloc(length * sizeof(int), 64);
     }
 
     ~sequence() {
@@ -62,37 +63,37 @@ public:
     }
 };
 
-int64_t binary = 0, debug_mode = 2;
+int binary = 0, debug_mode = 2;
 bool disk = false;
-size_t negative = 5, min_count = 5, num_threads = 12, min_reduce = 1, iter = 5, window = 5, batch_size = 11;
-size_t vocab_max_size = 1000, vocab_size = 0, hidden_size = 100;
+int negative = 5, min_count = 5, num_threads = 12, min_reduce = 1, iter = 5, window = 5, batch_size = 11;
+int vocab_max_size = 1000, vocab_size = 0, hidden_size = 100;
 uint64_t train_words = 0, file_size = 0;
 float_t alpha = 0.025f, sample = 1e-3f;
 const float_t EXP_RESOLUTION = EXP_TABLE_SIZE / (MAX_EXP * 2.0f);
 
 char train_file[MAX_STRING], output_file[MAX_STRING];
 char save_vocab_file[MAX_STRING], read_vocab_file[MAX_STRING];
-const size_t vocab_hash_size = 60000000;  // Maximum 60 * 0.7 = 42M words in the vocabulary
-const size_t table_size = 1e8;
+const int vocab_hash_size = 60000000;  // Maximum 60 * 0.7 = 42M words in the vocabulary
+const int table_size = 1e8;
 
 struct vocab_word *vocab = NULL;
-size_t *vocab_hash = NULL;
-size_t *table = NULL;
+int *vocab_hash = NULL;
+int *table = NULL;
 float_t *Wih = NULL, *Woh = NULL, *expTable = NULL;
 
 void InitUnigramTable() {
-    table = (size_t *) _mm_malloc(table_size * sizeof(size_t), 64);
+    table = (int *) _mm_malloc(table_size * sizeof(int), 64);
 
     const float_t power = 0.75f;
     double train_words_pow = 0.;
     #pragma omp parallel for num_threads(num_threads) reduction(+: train_words_pow)
-    for (size_t i = 0; i < vocab_size; i++) {
+    for (int i = 0; i < vocab_size; i++) {
         train_words_pow += pow(vocab[i].cn, power);
     }
 
-    size_t i = 0;
+    int i = 0;
     float_t d1 = pow(vocab[i].cn, power) / train_words_pow;
-    for (size_t a = 0; a < table_size; a++) {
+    for (int a = 0; a < table_size; a++) {
         table[a] = i;
         if (a / (float_t) table_size > d1) {
             i++;
@@ -105,7 +106,7 @@ void InitUnigramTable() {
 
 // Reads a single word from a file, assuming space + tab + EOL to be word boundaries
 void ReadWord(char *word, FILE *fin) {
-    size_t a = 0, ch;
+    int a = 0, ch;
     while (!feof(fin)) {
         ch = fgetc(fin);
         if (ch <= ' ') {
@@ -129,8 +130,8 @@ void ReadWord(char *word, FILE *fin) {
 }
 
 // Returns hash value of a word
-size_t GetWordHash(char *word) {
-    uint32_t hash = 0;
+int GetWordHash(char *word) {
+    uint hash = 0;
     size_t len = strlen(word);
     for (size_t i = 0; i < len; i++)
         hash = hash * 257 + word[i];
@@ -139,8 +140,8 @@ size_t GetWordHash(char *word) {
 }
 
 // Returns position of a word in the vocabulary; if the word is not found, returns -1
-int64_t SearchVocab(char *word) {
-    size_t hash = GetWordHash(word);
+int SearchVocab(char *word) {
+    int hash = GetWordHash(word);
     while (1) {
         if (vocab_hash[hash] == -1)
             return -1;
@@ -152,7 +153,7 @@ int64_t SearchVocab(char *word) {
 }
 
 // Reads a word and returns its index in the vocabulary
-int64_t ReadWordIndex(FILE *fin) {
+int ReadWordIndex(FILE *fin) {
     char word[MAX_STRING];
     ReadWord(word, fin);
     if (feof(fin))
@@ -161,9 +162,9 @@ int64_t ReadWordIndex(FILE *fin) {
 }
 
 // Adds a word to the vocabulary
-int64_t AddWordToVocab(char *word) {
-    size_t hash;
-    vocab[vocab_size].word = strdup(word);
+int AddWordToVocab(char *word) {
+    int hash;
+    vocab[vocab_size].word = strndup(word, MAX_STRING);
     vocab[vocab_size].cn = 0;
     vocab_size++;
     // Reallocate memory if needed
@@ -179,7 +180,7 @@ int64_t AddWordToVocab(char *word) {
 }
 
 // Used later for sorting by word counts
-int64_t VocabCompare(const void *a, const void *b) {
+int VocabCompare(const void *a, const void *b) {
     struct vocab_word *aa = (struct vocab_word *) a;
     struct vocab_word *bb = (struct vocab_word *) b;
     return (aa->cn > bb->cn) - (aa->cn < bb->cn);
@@ -189,18 +190,18 @@ int64_t VocabCompare(const void *a, const void *b) {
 void SortVocab() {
     // Sort the vocabulary and keep </s> at the first position
     qsort(&vocab[1], vocab_size - 1, sizeof(struct vocab_word), VocabCompare);
-    memset(vocab_hash, -1, vocab_hash_size * sizeof(size_t));
+    memset(vocab_hash, -1, vocab_hash_size * sizeof(int));
 
-    size_t size = vocab_size;
+    int size = vocab_size;
     train_words = 0;
-    for (size_t i = 0; i < size; i++) {
+    for (int i = 0; i < size; i++) {
         // Words occuring less than min_count times will be discarded from the vocab
-        if ((vocab[i].cn < min_count) && (i != 0)) {
+        if ((vocab[i].cn < (uint64_t)min_count) && (i != 0)) {
             vocab_size--;
             free(vocab[i].word);
         } else {
             // Hash will be re-computed, as after the sorting it is not actual
-            size_t hash = GetWordHash(vocab[i].word);
+            int hash = GetWordHash(vocab[i].word);
             while (vocab_hash[hash] != -1)
                 hash = (hash + 1) % vocab_hash_size;
             vocab_hash[hash] = i;
@@ -212,9 +213,9 @@ void SortVocab() {
 
 // Reduces the vocabulary by removing infrequent tokens
 void ReduceVocab() {
-    size_t count = 0;
-    for (int64_t i = 0; i < vocab_size; i++) {
-        if (vocab[i].cn > min_reduce) {
+    int count = 0;
+    for (int i = 0; i < vocab_size; i++) {
+        if (vocab[i].cn > (uint64_t)min_reduce) {
             vocab[count].cn = vocab[i].cn;
             vocab[count].word = vocab[i].word;
             count++;
@@ -223,11 +224,11 @@ void ReduceVocab() {
         }
     }
     vocab_size = count;
-    memset(vocab_hash, -1, vocab_hash_size * sizeof(size_t));
+    memset(vocab_hash, -1, vocab_hash_size * sizeof(int));
 
-    for (size_t i = 0; i < vocab_size; i++) {
+    for (int i = 0; i < vocab_size; i++) {
         // Hash will be re-computed, as it is not actual
-        size_t hash = GetWordHash(vocab[i].word);
+        int hash = GetWordHash(vocab[i].word);
         while (vocab_hash[hash] != -1)
             hash = (hash + 1) % vocab_hash_size;
         vocab_hash[hash] = i;
@@ -238,7 +239,7 @@ void ReduceVocab() {
 void LearnVocabFromTrainFile() {
     char word[MAX_STRING];
 
-    memset(vocab_hash, -1, vocab_hash_size * sizeof(size_t));
+    memset(vocab_hash, -1, vocab_hash_size * sizeof(int));
 
     FILE *fin = fopen(train_file, "rb");
     if (fin == NULL) {
@@ -255,12 +256,12 @@ void LearnVocabFromTrainFile() {
             break;
         train_words++;
         if ((debug_mode > 1) && (train_words % 100000 == 0)) {
-            printf("%lldK%c", train_words / 1000, 13);
+            printf("%" PRIu64 "K%c", train_words / 1000, 13);
             fflush(stdout);
         }
-        int64_t i = SearchVocab(word);
+        int i = SearchVocab(word);
         if (i == -1) {
-            int64_t a = AddWordToVocab(word);
+            int a = AddWordToVocab(word);
             vocab[a].cn = 1;
         } else
             vocab[i].cn++;
@@ -270,7 +271,7 @@ void LearnVocabFromTrainFile() {
     SortVocab();
     if (debug_mode > 0) {
         printf("Vocab size: %d\n", vocab_size);
-        printf("Words in train file: %lld\n", train_words);
+        printf("Words in train file: %" PRIu64 "\n", train_words);
     }
     file_size = ftell(fin);
     fclose(fin);
@@ -278,8 +279,9 @@ void LearnVocabFromTrainFile() {
 
 void SaveVocab() {
     FILE *fo = fopen(save_vocab_file, "wb");
-    for (size_t i = 0; i < vocab_size; i++)
-        fprintf(fo, "%s %d\n", vocab[i].word, vocab[i].cn);
+    for (int i = 0; i < vocab_size; i++) {
+        fprintf(fo, "%s %" PRIu64 "\n", vocab[i].word, vocab[i].cn);
+    }
     fclose(fo);
 }
 
@@ -290,7 +292,7 @@ void ReadVocab() {
         printf("Vocabulary file not found\n");
         exit(1);
     }
-    memset(vocab_hash, -1, vocab_hash_size * sizeof(size_t));
+    memset(vocab_hash, -1, vocab_hash_size * sizeof(int));
 
     char c;
     vocab_size = 0;
@@ -298,13 +300,13 @@ void ReadVocab() {
         ReadWord(word, fin);
         if (feof(fin))
             break;
-        int64_t i = AddWordToVocab(word);
-        fscanf(fin, "%d%c", &vocab[i].cn, &c);
+        int i = AddWordToVocab(word);
+        fscanf(fin, "%" PRIu64 "%c", &vocab[i].cn, &c);
     }
     SortVocab();
     if (debug_mode > 0) {
         printf("Vocab size: %d\n", vocab_size);
-        printf("Words in train file: %lld\n", train_words);
+        printf("Words in train file: %" PRIu64 "\n", train_words);
     }
     fclose(fin);
 
@@ -328,14 +330,14 @@ void InitNet() {
     }
 
     #pragma omp parallel for num_threads(num_threads) schedule(static, 1)
-    for (size_t i = 0; i < vocab_size; i++) {
+    for (int i = 0; i < vocab_size; i++) {
         memset(Wih + i * hidden_size, 0.f, hidden_size * sizeof(float_t));
         memset(Woh + i * hidden_size, 0.f, hidden_size * sizeof(float_t));
     }
 
     // initialization
     uint64_t next_random = 1;
-    for (size_t i = 0; i < vocab_size * hidden_size; i++) {
+    for (int i = 0; i < vocab_size * hidden_size; i++) {
         next_random = next_random * (uint64_t) 25214903917 + 11;
         Wih[i] = (((next_random & 0xFFFF) / 65536.f) - 0.5f) / hidden_size;
     }
@@ -344,7 +346,7 @@ void InitNet() {
 uint64_t loadStream(FILE *fin, int64_t *stream, const uint64_t total_words) {
     uint64_t word_count = 0;
     while (!feof(fin) && word_count < total_words) {
-        int64_t w = ReadWordIndex(fin);
+        int w = ReadWordIndex(fin);
         if (w == -1)
             continue;
         stream[word_count] = w;
@@ -381,7 +383,7 @@ void Train_SGNS() {
         size_t local_iter = iter;
         uint64_t  next_random = id;
         uint64_t word_count = 0, last_word_count = 0;
-        size_t sentence_length = 0, sentence_position = 0;
+        int sentence_length = 0, sentence_position = 0;
         int64_t sen[MAX_SENTENCE_LENGTH] __attribute__((aligned(64)));
 
         // load stream
@@ -404,7 +406,7 @@ void Train_SGNS() {
         float_t * outputMd = (float_t *) _mm_malloc((1 + negative) * hidden_size * sizeof(float_t), 64);
         float_t * corrM = (float_t *) _mm_malloc((1 + negative) * batch_size * sizeof(float_t), 64);
 
-        int64_t inputs[2 * window + 1] __attribute__((aligned(64)));
+        int inputs[2 * window + 1] __attribute__((aligned(64)));
         sequence outputs(1 + negative);
 
         #pragma omp barrier
@@ -473,18 +475,18 @@ void Train_SGNS() {
                 continue;
             }
 
-            int64_t target = sen[sentence_position];
+            int target = sen[sentence_position];
             outputs.indices[0] = target;
             outputs.meta[0] = 1;
 
             // get all input contexts around the target word
             next_random = next_random * (uint64_t) 25214903917 + 11;
-            int64_t b = next_random % window;
+            int b = next_random % window;
 
-            size_t num_inputs = 0;
-            for (size_t i = b; i < 2 * window + 1 - b; i++) {
+            int num_inputs = 0;
+            for (int i = b; i < 2 * window + 1 - b; i++) {
                 if (i != window) {
-                    size_t c = sentence_position - window + i;
+                    int c = sentence_position - window + i;
                     if (c < 0)
                         continue;
                     if (c >= sentence_length)
@@ -494,25 +496,25 @@ void Train_SGNS() {
                 }
             }
 
-            size_t num_batches = num_inputs / batch_size + ((num_inputs % batch_size > 0) ? 1 : 0);
+            int num_batches = num_inputs / batch_size + ((num_inputs % batch_size > 0) ? 1 : 0);
 
             // start mini-batches
-            for (size_t b = 0; b < num_batches; b++) {
+            for (int b = 0; b < num_batches; b++) {
 
                 // generate negative samples for output layer
-                size_t offset = 1;
-                for (size_t k = 0; k < negative; k++) {
+                int offset = 1;
+                for (int k = 0; k < negative; k++) {
                     next_random = next_random * (uint64_t) 25214903917 + 11;
-                    size_t sample = table[(next_random >> 16) % table_size];
+                    int sample = table[(next_random >> 16) % table_size];
                     if (!sample)
                         sample = next_random % (vocab_size - 1) + 1;
-                    size_t* p = find(outputs.indices, outputs.indices + offset, sample);
+                    int* p = find(outputs.indices, outputs.indices + offset, sample);
                     if (p == outputs.indices + offset) {
                         outputs.indices[offset] = sample;
                         outputs.meta[offset] = 1;
                         offset++;
                     } else {
-                        size_t idx = p - outputs.indices;
+                        int idx = p - outputs.indices;
                         outputs.meta[idx]++;
                     }
                 }
@@ -520,63 +522,63 @@ void Train_SGNS() {
                 outputs.length = offset;
 
                 // fetch input sub model
-                size_t input_start = b * batch_size;
-                size_t input_size  = min(batch_size, num_inputs - input_start);
-                for (size_t i = 0; i < input_size; i++) {
+                int input_start = b * batch_size;
+                int input_size  = min(batch_size, num_inputs - input_start);
+                for (int i = 0; i < input_size; i++) {
                     memcpy(inputM + i * hidden_size, Wih + inputs[input_start + i] * hidden_size, hidden_size * sizeof(float_t));
                 }
                 // fetch output sub model
-                size_t output_size = outputs.length;
-                for (size_t i = 0; i < output_size; i++) {
+                int output_size = outputs.length;
+                for (int i = 0; i < output_size; i++) {
                     memcpy(outputM + i * hidden_size, Woh + outputs.indices[i] * hidden_size, hidden_size * sizeof(float_t));
                 }
 
 #ifndef USE_MKL
-                for (size_t i = 0; i < output_size; i++) {
-                    size_t c = outputs.meta[i];
-                    for (size_t j = 0; j < input_size; j++) {
+                for (int i = 0; i < output_size; i++) {
+                    int c = outputs.meta[i];
+                    for (int j = 0; j < input_size; j++) {
                         float_t f = 0.f, g;
                         #pragma omp simd
-                        for (size_t k = 0; k < hidden_size; k++) {
+                        for (int k = 0; k < hidden_size; k++) {
                             f += outputM[i * hidden_size + k] * inputM[j * hidden_size + k];
                         }
-                        size_t label = (i ? 0 : 1);
+                        int label = (i ? 0 : 1);
                         if (f > MAX_EXP)
                             g = (label - 1) * alpha;
                         else if (f < -MAX_EXP)
                             g = label * alpha;
                         else
-                            g = (label - expTable[(size_t) ((f + MAX_EXP) * EXP_RESOLUTION)]) * alpha;
+                            g = (label - expTable[(int) ((f + MAX_EXP) * EXP_RESOLUTION)]) * alpha;
                         corrM[i * input_size + j] = g * c;
                     }
                 }
 #else
                 cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, output_size, input_size, hidden_size, 1.0f, outputM,
                         hidden_size, inputM, hidden_size, 0.0f, corrM, input_size);
-                for (size_t i = 0; i < output_size; i++) {
-                    int64_t c = outputs.meta[i];
-                    size_t offset = i * input_size;
+                for (int i = 0; i < output_size; i++) {
+                    int c = outputs.meta[i];
+                    int offset = i * input_size;
                     #pragma omp simd
-                    for (size_t j = 0; j < input_size; j++) {
+                    for (int j = 0; j < input_size; j++) {
                         float_t f = corrM[offset + j];
-                        size_t label = (i ? 0 : 1);
+                        int label = (i ? 0 : 1);
                         if (f > MAX_EXP)
                             f = (label - 1) * alpha;
                         else if (f < -MAX_EXP)
                             f = label * alpha;
                         else
-                            f = (label - expTable[(size_t) ((f + MAX_EXP) * EXP_RESOLUTION)]) * alpha;
+                            f = (label - expTable[(int) ((f + MAX_EXP) * EXP_RESOLUTION)]) * alpha;
                         corrM[offset + j] = f * c;
                     }
                 }
 #endif
 
 #ifndef USE_MKL
-                for (size_t i = 0; i < output_size; i++) {
-                    for (size_t j = 0; j < hidden_size; j++) {
+                for (int i = 0; i < output_size; i++) {
+                    for (int j = 0; j < hidden_size; j++) {
                         float_t f = 0.f;
                         #pragma omp simd
-                        for (size_t k = 0; k < input_size; k++) {
+                        for (int k = 0; k < input_size; k++) {
                             f += corrM[i * input_size + k] * inputM[k * hidden_size + j];
                         }
                         outputMd[i * hidden_size + j] = f;
@@ -588,11 +590,11 @@ void Train_SGNS() {
 #endif
 
 #ifndef USE_MKL
-                for (size_t i = 0; i < input_size; i++) {
-                    for (size_t j = 0; j < hidden_size; j++) {
+                for (int i = 0; i < input_size; i++) {
+                    for (int j = 0; j < hidden_size; j++) {
                         float_t f = 0.f;
                         #pragma omp simd
-                        for (size_t k = 0; k < output_size; k++) {
+                        for (int k = 0; k < output_size; k++) {
                             f += corrM[k * input_size + i] * outputM[k * hidden_size + j];
                         }
                         inputM[i * hidden_size + j] = f;
@@ -604,20 +606,20 @@ void Train_SGNS() {
 #endif
 
                 // subnet update
-                for (size_t i = 0; i < input_size; i++) {
-                    size_t src = i * hidden_size;
-                    size_t des = inputs[input_start + i] * hidden_size;
+                for (int i = 0; i < input_size; i++) {
+                    int src = i * hidden_size;
+                    int des = inputs[input_start + i] * hidden_size;
                     #pragma omp simd
-                    for (size_t j = 0; j < hidden_size; j++) {
+                    for (int j = 0; j < hidden_size; j++) {
                         Wih[des + j] += inputM[src + j];
                     }
                 }
 
-                for (size_t i = 0; i < output_size; i++) {
-                    size_t src = i * hidden_size;
-                    size_t des = outputs.indices[i] * hidden_size;
+                for (int i = 0; i < output_size; i++) {
+                    int src = i * hidden_size;
+                    int des = outputs.indices[i] * hidden_size;
                     #pragma omp simd
-                    for (size_t j = 0; j < hidden_size; j++) {
+                    for (int j = 0; j < hidden_size; j++) {
                         Woh[des + j] += outputMd[src + j];
                     }
                 }
@@ -658,13 +660,13 @@ void saveModel() {
     FILE *fo = fopen(output_file, "wb");
     // Save the word vectors
     fprintf(fo, "%d %d\n", vocab_size, hidden_size);
-    for (size_t a = 0; a < vocab_size; a++) {
+    for (int a = 0; a < vocab_size; a++) {
         fprintf(fo, "%s ", vocab[a].word);
         if (binary)
-            for (size_t b = 0; b < hidden_size; b++)
+            for (int b = 0; b < hidden_size; b++)
                 fwrite(&Wih[a * hidden_size + b], sizeof(float_t), 1, fo);
         else
-            for (size_t b = 0; b < hidden_size; b++)
+            for (int b = 0; b < hidden_size; b++)
                 fprintf(fo, "%f ", Wih[a * hidden_size + b]);
         fprintf(fo, "\n");
     }
@@ -718,7 +720,7 @@ int main(int argc, char **argv) {
     save_vocab_file[0] = 0;
     read_vocab_file[0] = 0;
 
-    size_t i;
+    int i;
     if ((i = ArgPos((char *) "-size", argc, argv)) > 0)
         hidden_size = atoi(argv[i + 1]);
     if ((i = ArgPos((char *) "-train", argc, argv)) > 0)
@@ -753,7 +755,7 @@ int main(int argc, char **argv) {
         disk = true;
 
     vocab = (struct vocab_word *) calloc(vocab_max_size, sizeof(struct vocab_word));
-    vocab_hash = (size_t *) _mm_malloc(vocab_hash_size * sizeof(size_t), 64);
+    vocab_hash = (int *) _mm_malloc(vocab_hash_size * sizeof(int), 64);
     expTable = (float_t *) _mm_malloc((EXP_TABLE_SIZE + 1) * sizeof(float_t), 64);
     for (i = 0; i < EXP_TABLE_SIZE + 1; i++) {
         expTable[i] = exp((i / (float_t) EXP_TABLE_SIZE * 2 - 1) * MAX_EXP); // Precompute the exp() table
